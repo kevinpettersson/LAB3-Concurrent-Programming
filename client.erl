@@ -20,63 +20,73 @@ initial_state(Nick, GUIAtom, ServerAtom) ->
         channels = []   % initiate a empty list to keep track of which channels a client are in.
     }.
 
-% handle/2 handles each kind of request from GUI
-% Parameters:
-%   - the current state of the client (St)
-%   - request data from GUI
-% Must return a tuple {reply, Data, NewState}, where:
-%   - Data is what is sent to GUI, either the atom `ok` or a tuple {error, Atom, "Error message"}
-%   - NewState is the updated state of the client
-
 % Join channel
 handle(St, {join, Channel}) ->
-    case genserver:request(St#client_st.server, {join, self(), Channel}) of
-        joined -> 
-            {reply, ok, St#client_st{channels = [Channel | St#client_st.channels]}};
-        failed ->
-            {reply, {error, already_joined, "already in channel"}, St};
-        _ -> 
-            {reply, {error, error_in_client_handle_join, "unexpected error client_handle_join"}, St}
+    % check so the server is a registrered process.
+    case lists:member(St#client_st.server, registered()) of
+        true ->
+            case catch genserver:request(St#client_st.server, {join, self(), Channel}) of
+                % server returns joined then client replies ok and updates it's channel-list.
+                joined -> 
+                    UpdatedChannels = [Channel | St#client_st.channels],           
+                    {reply, ok, St#client_st{channels = UpdatedChannels}};
+                failed ->
+                    {reply, {error, user_already_joined, "already in channel"}, St};
+                _ -> 
+                    {reply, {error, server_not_reached, "server unreachable in client:handle_join"}, St}
+            end;
+        false ->
+            {reply, {error, server_not_reached, "server unreachable"}, St}
     end;
-                
-    % TODO: Implement this function
-    % {reply, ok, St} ;
-    %{reply, {error, not_implemented, "join not implemented"}, St} ;
 
 % Leave channel
 handle(St, {leave, Channel}) ->
-    case lists:member(Channel, St#client_st.channels) of
-        true ->
-            case genserver:request(list_to_atom(Channel), {leave, self()}) of
+    % check if the client is inside of the channel
+    case lists:member(Channel, St#client_st.channels) of 
+        true -> 
+            % send request to server to leave the channel
+            case genserver:request(list_to_atom(Channel), {leave, self()}) of 
+                % if leaving was sucessfull then delete channel from clients channel-list.
                 left_channel_sucesfull -> 
                     UpdatedChannels = lists:delete(Channel, St#client_st.channels),
                     {reply, ok, St#client_st{channels = UpdatedChannels}};
-                not_in_channel ->
-                    {reply, {error, user_not_joined, "not in channel"}, St};
+                % if server returns not_in_channel it means
+                not_in_channel -> 
+                    {reply, {error, user_not_joined, "not in channel"}, St}; 
                 _ -> 
-                    {reply, {error, user_not_joined, "unexpected error in client:handle_leave"}}
+                    {reply, {error, server_not_reached, "server unreachable in client:handle_leave"}}
             end;
-        false ->
+        false -> 
             {reply, {error, user_not_joined, "not in channel"}, St}
     end;
 
+
 % Sending message (from GUI, to channel)
 handle(St, {message_send, Channel, Msg}) ->
-    case genserver:request(#client_st.server, {message_send, Channel, Msg, self()}) of
-        message_sent -> 
-            {reply, ok, St};
-        user_not_joined ->
-            {reply, {error, user_not_joined, "cant send message here"}, St}
+    case whereis(list_to_atom(Channel)) of
+        undefined ->
+            {reply, {error, server_not_reached, "channel does not exist"}, St};  % Check channel existence
+
+        _ ->
+            Result = genserver:request(list_to_atom(Channel), {message_send, Channel, self(), St#client_st.nick, Msg}),
+            case Result of
+                ok ->
+                    {reply, ok, St};
+                failed ->
+                    {reply, {error, user_not_joined, "not in channel"}, St};
+                _ ->
+                    {reply, {error, server_not_reached, "unknown error"}, St}
+            end
     end;
 
 
-    % TODO: Implement this function
-    % {reply, ok, St} ;
+
+
 
 % This case is only relevant for the distinction assignment!
 % Change nick (no check, local only)
 handle(St, {nick, NewNick}) ->
-    {reply, ok, St#client_st{nick = NewNick}} ;
+    {reply, ok, St#client_st{nick = NewNick}};
 
 % ---------------------------------------------------------------------------
 % The cases below do not need to be changed...
