@@ -25,8 +25,10 @@ handle(St, {join, Channel}) ->
     % check so the server is a registrered process.
     case lists:member(St#client_st.server, registered()) of
         true ->
+            % send a join-request to server,
+            % catch in-case there is a unexpected error in the server we still want to send a message to the GUI.
             case catch genserver:request(St#client_st.server, {join, self(), Channel}) of
-                % server returns joined then client replies ok and updates it's channel-list.
+                % if server returns joined, update clients channel-list and return ok to GUI.
                 joined -> 
                     UpdatedChannels = [Channel | St#client_st.channels],           
                     {reply, ok, St#client_st{channels = UpdatedChannels}};
@@ -41,16 +43,16 @@ handle(St, {join, Channel}) ->
 
 % Leave channel
 handle(St, {leave, Channel}) ->
-    % check if the client is inside of the channel
+    % check if the channel is alredy in clients channel-list
     case lists:member(Channel, St#client_st.channels) of 
         true -> 
-            % send request to server to leave the channel
+            % send a leave-request to server
             case genserver:request(list_to_atom(Channel), {leave, self()}) of 
                 % if leaving was sucessfull then delete channel from clients channel-list.
                 left_channel_sucesfull -> 
                     UpdatedChannels = lists:delete(Channel, St#client_st.channels),
                     {reply, ok, St#client_st{channels = UpdatedChannels}};
-                % if server returns not_in_channel it means
+                % if the server responds that the client was not joined.
                 not_in_channel -> 
                     {reply, {error, user_not_joined, "not in channel"}, St}; 
                 _ -> 
@@ -63,25 +65,24 @@ handle(St, {leave, Channel}) ->
 
 % Sending message (from GUI, to channel)
 handle(St, {message_send, Channel, Msg}) ->
-    case whereis(list_to_atom(Channel)) of
+    ChannelAtom = list_to_atom(Channel),
+    % if the channel is a registrered process
+    case whereis(ChannelAtom) of
+        % if the channel was not a registrered process, reply with an error to the gui.
         undefined ->
-            {reply, {error, server_not_reached, "channel does not exist"}, St};  % Check channel existence
-
+            {reply, {error, server_not_reached, "channel does not exist"}, St};
+        % if the channel was a registrered process
         _ ->
-            Result = genserver:request(list_to_atom(Channel), {message_send, Channel, self(), St#client_st.nick, Msg}),
-            case Result of
+            % send a message_send request to the server
+            case genserver:request(ChannelAtom, {message_send, Channel, self(), St#client_st.nick, Msg}) of
                 ok ->
                     {reply, ok, St};
                 failed ->
                     {reply, {error, user_not_joined, "not in channel"}, St};
                 _ ->
-                    {reply, {error, server_not_reached, "unknown error"}, St}
+                    {reply, {error, server_not_reached, "server unreachable in client:handl_message_send"}, St}
             end
     end;
-
-
-
-
 
 % This case is only relevant for the distinction assignment!
 % Change nick (no check, local only)
